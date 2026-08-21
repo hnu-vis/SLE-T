@@ -1,0 +1,321 @@
+
+
+
+
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.transforms as T
+import numpy as np
+from dinov2.hub.backbones import dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14, dinov2_vitb14_reg, dinov2_vitl14_reg
+
+from detectron2.modeling.backbone import Backbone
+from detectron2.layers import ShapeSpec
+from typing import Dict
+from detectron2.structures import ImageList
+
+import os
+import time
+from IPython import embed
+
+from dinov3.hub.backbones import dinov3_convnext_base
+
+
+import torch._utils
+try:
+    torch._utils._rebuild_parameter_v2
+except AttributeError:
+    def _set_obj_state(obj, state):
+        if isinstance(state, tuple):
+            if not len(state) == 2:
+                raise RuntimeError(f"Invalid serialized state: {state}")
+            dict_state = state[0]
+            slots_state = state[1]
+        else:
+            dict_state = state
+            slots_state = None
+
+        for k, v in dict_state.items():
+            setattr(obj, k, v)
+
+        if slots_state:
+            for k, v in slots_state.items():
+                setattr(obj, k, v)
+        return obj
+    def _rebuild_parameter_v2(data, requires_grad, backward_hooks, state):
+        param = torch.nn.Parameter(data, requires_grad)
+        param._backward_hooks = backward_hooks
+        param = _set_obj_state(param, state)
+        return param
+    torch._utils._rebuild_parameter_v2 = _rebuild_parameter_v2
+
+
+class dino_preprocessing():
+
+
+
+
+    def __init__(self, pixel_mean, pixel_std):
+        normalize = T.Normalize(mean=pixel_mean, std=pixel_std)        
+        self.preprocessing_img = normalize
+
+    def __call__(self, image):
+        return self.preprocessing_img(image)
+
+class DinoVitFeatureExtractor_v3(Backbone):
+
+
+
+    def __init__(self, cfg, model_name='dinov2_vits14', normalize_feature=True, freeze=True, is_BGR=True):
+        super(DinoVitFeatureExtractor_v3, self).__init__()
+        
+        pixel_mean = [123.675, 116.280, 103.530]
+        pixel_std = [58.395, 57.120, 57.375]
+        self.preprocessing = dino_preprocessing(pixel_mean, pixel_std)
+
+        self.is_BGR = is_BGR
+        self.normalize_feature = normalize_feature
+        if "v3" in model_name:
+            dino_v3_models = {
+                "dinov3-convnext-base": (dinov3_convnext_base, None)
+            }
+            
+            name_to_weights = {"dinov3-convnext-base": "dinov3-convnext-base-pretrain-lvd1689m.pth",
+            }
+            
+            self.model_name = model_name
+            assert (
+                self.model_name in dino_v3_models.keys()
+            ), f"class DinoV2VitFeatureExtractor(nn.Module): is only available for {dino_v3_models.keys()}"
+            path_to_pretrained_weights = "weights/" + model_name + "-pretrain-lvd1689m.pth"
+            assert (
+                os.path.exists(path_to_pretrained_weights)
+            ), f"DINO v3 pretrained model path {path_to_pretrained_weights} does not exist!"
+            print(f"Model Path: {path_to_pretrained_weights}")
+            
+            model_func_name, _ = dino_v3_models[self.model_name]
+            
+            self.encoder = model_func_name(pretrained=False)
+            self.encoder.load_state_dict(torch.load(path_to_pretrained_weights),strict=False)
+            if freeze:
+                for param in self.encoder.parameters():
+                    param.requires_grad = False
+                self.encoder.eval()
+            
+            self._out_features = ['dino_out']
+            
+            
+            
+            
+
+
+    def forward(self, x):
+        
+        if self.is_BGR:
+            x = [torch.tensor(img['image'])[[2,1,0],:,:].float().to(device=next(self.encoder.parameters()).device) for img in x]
+        else:
+            x = [torch.tensor(img['image']).float().to(device=next(self.encoder.parameters()).device) for img in x]
+        x = ImageList.from_tensors(x).tensor
+        x = self.preprocessing(x)
+        batch_size, _, height, width = x.size()
+        
+        
+        
+        
+        
+
+        x = self.encoder.get_intermediate_layers(x)[0] 
+        
+        
+
+        
+        
+
+        
+
+        return x
+        
+    
+    @property
+    def size_divisibility(self) -> int:
+        return self.patch_size
+
+    @property
+    def padding_constraints(self) -> Dict[str, int]:
+        return {'size_divisibility': self.size_divisibility, 'square_size': 0}
+
+    def output_shape(self):
+
+
+
+
+        
+        return {
+            name: ShapeSpec(
+                channels=self._out_feature_channels[name], stride=self._out_feature_strides[name]
+            )
+            for name in self._out_features
+        }
+        
+
+class DinoVitFeatureExtractor_GC(Backbone):
+
+
+
+    def __init__(self, cfg=None, model_name='dinov2_vits14', normalize_feature=True, freeze=True, is_BGR=True):
+        super(DinoVitFeatureExtractor_GC, self).__init__()
+        
+        pixel_mean = [123.675, 116.280, 103.530]
+        pixel_std = [58.395, 57.120, 57.375]
+        self.preprocessing = dino_preprocessing(pixel_mean, pixel_std)
+
+        self.is_BGR = is_BGR
+        self.normalize_feature = normalize_feature
+        
+        self.gcBlock = ContextBlock(inplanes=cfg.SEMISUPNET.DINO_OUT_DIM, \
+            ratio=1/16.0, out_channels=cfg.SEMISUPNET.DOWNSTREAM_OUT_DIM)
+        
+        if "v2" not in model_name:
+            
+            self.model_name = model_name
+            local_dir = "dinoteacher/engine/dinov1/hub/facebookresearch_dino_main"
+            self.encoder = torch.hub.load(local_dir, source='local', model=model_name, path=model_name)
+            if freeze:
+                for param in self.encoder.parameters():
+                    param.requires_grad = False
+                self.encoder.eval()
+
+            self.embed_dim = self.encoder.embed_dim
+            self.patch_size = int(model_name.rsplit('vit',1)[-1][1:])
+            
+        else:
+            dino_v2_models = {
+                "dinov2_vits14": (14, 384, dinov2_vits14), 
+                "dinov2_vitb14": (14, 768, dinov2_vitb14),
+                "dinov2_vitl14": (14, 1024, dinov2_vitl14),
+                "dinov2_vitg14": (14, 1536, dinov2_vitg14),
+                "dinov2_vitb14_reg4": (14, 768, dinov2_vitb14_reg),
+                "dinov2_vitl14_reg4": (14, 1024, dinov2_vitl14_reg),
+                
+            }
+            
+            name_to_weights = {"dinov2_vits14": "dinov2_vits14_pretrain.pth",
+                            "dinov2_vitb14": "dinov2_vitb14_pretrain.pth",
+                            "dinov2_vitl14": "dinov2_vitl14_pretrain.pth",
+                            "dinov2_vitg14": "dinov2_vitg14_pretrain.pth",
+                            "dinov2_vitb14_reg4": "dinov2_vitb14_reg4_pretrain.pth",
+                            "dinov2_vitl14_reg4": "dinov2_vitl14_reg4_pretrain.pth",
+                            
+            }
+            
+            self.model_name = model_name
+            assert (
+                self.model_name in dino_v2_models.keys()
+            ), f"class DinoV2VitFeatureExtractor(nn.Module): is only available for {dino_v2_models.keys()}"
+            path_to_pretrained_weights = "weights/" + model_name + "_pretrain.pth"
+            assert (
+                os.path.exists(path_to_pretrained_weights)
+            ), f"DINO v2 pretrained model path {path_to_pretrained_weights} does not exist!"
+            print(f"Model Path: {path_to_pretrained_weights}")
+            
+            patch_size, embed_dim, model_func_name = dino_v2_models[self.model_name]
+            
+            if patch_size == 16 and "v2" in model_name:
+                img_size = 592
+            else:
+                img_size = 518  
+            self.encoder = model_func_name(pretrained=False, patch_size=patch_size, img_size=img_size)
+            self.encoder.load_state_dict(torch.load(path_to_pretrained_weights),strict=False)
+            if freeze:
+                for param in self.encoder.parameters():
+                    param.requires_grad = False
+                self.encoder.eval()
+
+            gc_ckpt_path = cfg.SEMISUPNET.GC_CKPT_PATH
+            full_state_dict = torch.load(gc_ckpt_path, map_location='cuda')
+            
+            prefix = "modelStudent.backbone.gcBlock."
+            gc_state_dict = {
+                k[len(prefix):]: v
+                for k, v in full_state_dict['model'].items()
+                if k.startswith(prefix)
+            }
+            
+            
+            
+            print(self.gcBlock.channel_add_conv[0].weight[0][0])
+            print(self.gcBlock.load_state_dict(gc_state_dict))
+            print(self.gcBlock.channel_add_conv[0].weight[0][0])
+            
+            if freeze:
+                for param in self.gcBlock.parameters():
+                    param.requires_grad = False
+                self.gcBlock.eval()
+            
+            
+            assert self.encoder.embed_dim == embed_dim
+            self.embed_dim = self.encoder.embed_dim
+            self.patch_size = patch_size
+            self._out_features = ['gc_out']
+            self._out_feature_channels = {'gc_out':self.encoder.blocks[-1].norm2.bias.shape[0]}
+            self._out_feature_strides = {'gc_out':self.patch_size}
+
+
+    def forward(self, x):
+        
+        if self.is_BGR:
+            x = [torch.tensor(img['image'])[[2,1,0],:,:].float().to(device=next(self.encoder.parameters()).device) for img in x]
+        else:
+            x = [torch.tensor(img['image']).float().to(device=next(self.encoder.parameters()).device) for img in x]
+        x = ImageList.from_tensors(x, self.patch_size).tensor
+        x = self.preprocessing(x)
+        batch_size, _, height, width = x.size()
+        
+        assert (height % self.patch_size) == 0
+        assert (width % self.patch_size) == 0
+        f_height = height // self.patch_size
+        f_width = width // self.patch_size
+
+        x = self.encoder.get_intermediate_layers(x)[0] 
+        if "v2" not in self.model_name:
+            x = x[:,1:,:] 
+
+        
+        
+        
+
+        
+        x_grid_features = x.contiguous().transpose(1, 2).contiguous().view(batch_size, self.embed_dim, f_height, f_width)
+
+        
+        x_grid_features = self.gcBlock(x_grid_features)
+
+        
+        if self.normalize_feature:
+            x_grid_features = F.normalize(x_grid_features, p=2, dim=1)
+            
+        
+        return x_grid_features
+    
+    @property
+    def size_divisibility(self) -> int:
+        return self.patch_size
+
+    @property
+    def padding_constraints(self) -> Dict[str, int]:
+        return {'size_divisibility': self.size_divisibility, 'square_size': 0}
+
+    def output_shape(self):
+
+
+
+
+        
+        return {
+            name: ShapeSpec(
+                channels=self._out_feature_channels[name], stride=self._out_feature_strides[name]
+            )
+            for name in self._out_features
+        }
+

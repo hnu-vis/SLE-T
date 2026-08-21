@@ -1,0 +1,70 @@
+_BASE_: "./Base-RCNN-C4.yaml"
+OUTPUT_DIR: "output/test_vit_labeller"
+INPUT:
+
+  MIN_SIZE_TRAIN: (480,)
+  MAX_SIZE_TRAIN: 1333
+  RANDOM_FLIP_PROB: 0.5
+MODEL:
+  PIXEL_STD: [57.375, 57.120, 58.395]
+  META_ARCHITECTURE: "DAobjTwoStagePseudoLabGeneralizedRCNN_GC_shortcut"
+  BACKBONE:
+    NAME: "build_dino_vit_adapter_backbone"
+  MASK_ON: False
+  PROPOSAL_GENERATOR:
+    NAME: "PseudoLabRPN"
+  RPN:
+    IN_FEATURES: ["va_out_s16"]
+    PRE_NMS_TOPK_TRAIN: 12000
+    POST_NMS_TOPK_TRAIN: 2000
+  ROI_HEADS:
+
+    NAME: "SingleScaleROIHeadsPseudoLab"
+    LOSS: "CrossEntropy"
+    NUM_CLASSES: 8
+    IN_FEATURES: ["va_out_s16"]
+    BATCH_SIZE_PER_IMAGE: 512
+  ROI_BOX_HEAD:
+    NAME: "FastRCNNConvFCHead"
+    NUM_FC: 2
+    POOLER_RESOLUTION: 7
+SOLVER:
+  BASE_LR: 0.02
+  STEPS: (60000, 80000)
+  MAX_ITER: 90000
+  CHECKPOINT_PERIOD: 5000
+DATALOADER:
+  SUP_PERCENT: 100.0
+DATASETS:
+  CROSS_DATASET: True
+
+
+  TRAIN: ("cityscapes_in_voc_trainval",)
+  TRAIN_LABEL: ("cityscapes_in_voc_trainval",)
+  TRAIN_UNLABEL: ("cityscapes_in_voc_trainval",)
+  TEST: ("cityscapes_in_voc_val","foggy_cityscapes_in_voc_val", "foggy_cityscapes_in_voc_all_val")
+SEMISUPNET:
+  DIS_TYPE: "va_out_s16"
+  DIS_LOSS_WEIGHT: 0.0
+  Trainer: "dinoteacher"
+  BBOX_THRESHOLD: 0.8
+  TEACHER_UPDATE_ITER: 1
+  BURN_UP_STEP: 100000
+  EMA_KEEP_RATE: 0.999
+  UNSUP_LOSS_WEIGHT: 0.0
+  SUP_LOSS_WEIGHT: 1.0
+  DINO_PATCH_SIZE: 14
+  DINO_BBONE_MODEL: "dinov2_vitl14"
+  DINO_BBONE_LR_SCALE: 0.0
+  DINO_OUT_DIM: 768
+  DOWNSTREAM_OUT_DIM: 768
+  USE_ADV: False
+  ALBUM_AUG: False
+  ALBUM_AUG_P: 0.5
+  FREEZE: "freeze_all"
+
+TEST:
+  EVAL_PERIOD: 5000
+
+
+

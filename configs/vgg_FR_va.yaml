@@ -1,0 +1,33 @@
+_BASE_: "./Base-RCNN-C4.yaml"
+MODEL:
+  META_ARCHITECTURE: "GeneralizedRCNN"
+  WEIGHTS: "weights/vgg16_bn-6c64b313_converted_prefix.pth"
+  BACKBONE:
+    NAME: "build_vgg_backbone"
+  RPN:
+    IN_FEATURES: ["vgg4"]
+    PRE_NMS_TOPK_TEST: 6000
+    POST_NMS_TOPK_TEST: 1000
+  ROI_HEADS:
+    NAME: "StandardROIHeads"
+    NUM_CLASSES: 8
+    IN_FEATURES: ["vgg4"]
+  ROI_BOX_HEAD:
+    NAME: "FastRCNNConvFCHead"
+    NUM_FC: 2
+    POOLER_RESOLUTION: 7
+DATASETS:
+  TRAIN: ("cityscapes_in_voc_trainval",)
+  TEST: ("foggy_cityscapes_in_voc_all_val", "cityscapes_in_voc_val", "foggy_cityscapes_in_voc_val", )
+SOLVER:
+  IMS_PER_BATCH: 2
+  BASE_LR: 0.02
+  STEPS: (60000, 80000)
+  MAX_ITER: 90000
+INPUT:
+  MIN_SIZE_TRAIN: (480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800)
+  MAX_SIZE_TRAIN: 1333
+  RANDOM_FLIP_PROB: 0.5
+VERSION: 2
+TEST:
+  EVAL_PERIOD: 5000
